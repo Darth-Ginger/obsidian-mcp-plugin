@@ -1,4 +1,4 @@
-import { App, TFile, TFolder, TAbstractFile, Command, getAllTags } from 'obsidian';
+import { App, TFile, TFolder, TAbstractFile, Command, getAllTags, Notice } from 'obsidian';
 import { ObsidianConfig, ObsidianFile, ObsidianFileResponse } from '../types/obsidian';
 import { paginateFiles } from './response-limiter';
 import { isImageFile as checkIsImageFile, processImageResponse, IMAGE_PROCESSING_PRESETS } from './image-handler';
@@ -28,6 +28,9 @@ export interface ObsidianAPIPluginRef {
     // ADR-204: exact command IDs permitted for system.execute. Empty/absent
     // blocks every command (fail-closed).
     commandExecutionAllowlist?: string[];
+    // ADR-204: show an in-app Notice when an agent runs a command. Default on
+    // (absent = enabled); set false to silence.
+    notifyOnCommandExecution?: boolean;
   };
   ignoreManager?: MCPIgnoreManager;
   mcpServer?: ObsidianAPIMCPServerInfo;
@@ -52,10 +55,17 @@ interface ObsidianCommand {
 
 /** Result of a command-palette execution attempt (ADR-204) */
 export interface CommandExecutionResult {
+  /** Whether the command was *dispatched* — NOT whether it finished. Command
+   * execution is fire-and-forget; Obsidian gives no completion signal. */
   success: boolean;
   commandId: string;
   /** Present when the command was refused (e.g. not on the allowlist) */
   error?: { code: string; message: string };
+  /** Best-effort: a modal/dialog opened during dispatch and is waiting on a
+   * human. The agent cannot see or drive it. See `warning`. */
+  awaitingUserInteraction?: boolean;
+  /** Human-readable caveat, set alongside awaitingUserInteraction. */
+  warning?: string;
 }
 
 /** Structured patch parameters for vault file operations */
@@ -914,7 +924,6 @@ export class ObsidianAPI {
    * without reconstructing the API.
    */
   async executeCommand(commandId: string): Promise<CommandExecutionResult> {
-    await Promise.resolve(); // async to match the SecureObsidianAPI override's permission gate
     const allowlist = this.plugin?.settings?.commandExecutionAllowlist ?? [];
     if (!allowlist.includes(commandId)) {
       Debug.log(`🚫 Command '${commandId}' blocked — not in execution allowlist`);
@@ -929,11 +938,65 @@ export class ObsidianAPI {
     }
 
     const appInternal = this.app as unknown as AppInternal;
-    const success = appInternal.commands?.executeCommandById?.(commandId);
-    return {
-      success: !!success,
-      commandId
-    };
+
+    // Snapshot open dialogs BEFORE dispatch so we can tell if this command opened
+    // one (best-effort interaction detection — see below).
+    const modalsBefore = this.countOpenDialogs();
+
+    const success = !!appInternal.commands?.executeCommandById?.(commandId);
+
+    // In-app awareness: a command was just run on the user's behalf by an agent.
+    // Default on (absent setting = enabled); gated so it can be silenced.
+    if (success && this.plugin?.settings?.notifyOnCommandExecution !== false) {
+      this.notifyCommandExecuted(commandId);
+    }
+
+    const result: CommandExecutionResult = { success, commandId };
+
+    // Interaction detection: executeCommandById is fire-and-forget and returns
+    // as soon as the command's callback was invoked — so a command that opens a
+    // modal (e.g. QuickAdd's suggester) reports success while a dialog now waits
+    // on a human the agent cannot see or drive. Detect that a dialog opened and
+    // flag it, converting a silent trap into a reported state.
+    if (success && await this.didOpenDialog(modalsBefore)) {
+      result.awaitingUserInteraction = true;
+      result.warning = 'This command opened a dialog in Obsidian that needs a person to complete or dismiss it. "success" means the command was dispatched, not that it finished — the agent cannot see or act on the dialog.';
+    }
+
+    return result;
+  }
+
+  /**
+   * Count open Obsidian dialogs (modals + suggester prompts) in the DOM.
+   * Best-effort heuristic: returns 0 outside a DOM environment (e.g. tests).
+   */
+  private countOpenDialogs(): number {
+    // activeDocument (Obsidian global) resolves to the focused window's document,
+    // so this also sees dialogs opened in a pop-out window. Absent in non-DOM
+    // runtimes (tests) — guard and no-op.
+    if (typeof activeDocument === 'undefined') return 0;
+    return activeDocument.querySelectorAll('.modal-container, .prompt').length;
+  }
+
+  /**
+   * Resolves true if a dialog opened relative to `before`, after letting the UI
+   * settle for a frame or two. Fire-and-forget commands may mount their modal on
+   * the next tick, so we wait briefly before re-counting.
+   */
+  private didOpenDialog(before: number): Promise<boolean> {
+    if (typeof activeDocument === 'undefined') return Promise.resolve(false);
+    return new Promise<boolean>(resolve => {
+      window.setTimeout(() => resolve(this.countOpenDialogs() > before), 150);
+    });
+  }
+
+  private notifyCommandExecuted(commandId: string): void {
+    try {
+      new Notice(`MCP agent ran command: ${commandId}`);
+    } catch {
+      // Notice is unavailable outside the Obsidian runtime (e.g. tests) — the
+      // awareness cue is cosmetic, so a failure here must never break execution.
+    }
   }
 
   // Helper methods
