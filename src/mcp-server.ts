@@ -45,6 +45,8 @@ interface MCPPluginRef {
     security?: Partial<import('./security/vault-security-manager').SecuritySettings>;
     // From ObsidianAPIPluginRef (for ObsidianAPI)
     validation?: Partial<import('./validation/input-validator').ValidationConfig>;
+    // ADR-204: exact command IDs permitted for system.execute (allowlist gate)
+    commandExecutionAllowlist?: string[];
   };
   manifest: { dir?: string };
   // From ObsidianAPIPluginRef

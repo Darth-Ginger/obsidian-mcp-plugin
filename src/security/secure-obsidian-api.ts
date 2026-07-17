@@ -17,6 +17,8 @@ interface SecurePluginRef {
 		security?: Partial<SecuritySettings>;
 		validation?: Partial<import('../validation/input-validator').ValidationConfig>;
 		httpPort?: number;
+		// ADR-204: read by the base ObsidianAPI.executeCommand allowlist gate.
+		commandExecutionAllowlist?: string[];
 	};
 	ignoreManager?: MCPIgnoreManager;
 	mcpServer?: { isServerRunning(): boolean; getConnectionCount(): number };

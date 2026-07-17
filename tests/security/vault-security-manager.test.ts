@@ -70,10 +70,11 @@ describe('VaultSecurityManager', () => {
           delete: false,
           move: false,
           rename: false,
-          execute: false
+          execute: false,
+          executeCommand: false
         }
       };
-      
+
       const restrictedManager = new VaultSecurityManager(mockApp, restrictedSettings);
 
       const operations = [
@@ -105,12 +106,13 @@ describe('VaultSecurityManager', () => {
           delete: true,
           move: true,
           rename: true,
-          execute: true
+          execute: true,
+          executeCommand: true
         }
       };
-      
+
       const manager = new VaultSecurityManager(mockApp, settings);
-      
+
       await expect(manager.validateOperation({
         type: OperationType.COPY,
         path: 'source.md',
@@ -273,7 +275,8 @@ describe('VaultSecurityManager', () => {
         delete: false,
         move: false,
         rename: false,
-        execute: false
+        execute: false,
+        executeCommand: false
       });
     });
 
@@ -286,7 +289,8 @@ describe('VaultSecurityManager', () => {
         delete: false,
         move: true,
         rename: true,
-        execute: true
+        execute: true,
+        executeCommand: false
       });
     });
 
@@ -299,7 +303,8 @@ describe('VaultSecurityManager', () => {
         delete: true,
         move: true,
         rename: true,
-        execute: true
+        execute: true,
+        executeCommand: true
       });
     });
   });
@@ -411,10 +416,11 @@ describe('VaultSecurityManager', () => {
           delete: false, // Disable delete for second test
           move: true,
           rename: true,
-          execute: true
+          execute: true,
+          executeCommand: true
         }
       };
-      
+
       const manager = new VaultSecurityManager(mockApp, settings);
 
       // This should pass even with dangerous path because validation is disabled
