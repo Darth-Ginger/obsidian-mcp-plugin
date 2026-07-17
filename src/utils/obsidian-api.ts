@@ -25,6 +25,9 @@ export interface ObsidianAPIPluginRef {
     httpsEnabled?: boolean;
     httpPort?: number;
     httpsPort?: number;
+    // ADR-204: exact command IDs permitted for system.execute. Empty/absent
+    // blocks every command (fail-closed).
+    commandExecutionAllowlist?: string[];
   };
   ignoreManager?: MCPIgnoreManager;
   mcpServer?: ObsidianAPIMCPServerInfo;
@@ -45,6 +48,14 @@ interface ObsidianCommand {
   id: string;
   name: string;
   icon?: string;
+}
+
+/** Result of a command-palette execution attempt (ADR-204) */
+export interface CommandExecutionResult {
+  success: boolean;
+  commandId: string;
+  /** Present when the command was refused (e.g. not on the allowlist) */
+  error?: { code: string; message: string };
 }
 
 /** Structured patch parameters for vault file operations */
@@ -892,7 +903,31 @@ export class ObsidianAPI {
     }));
   }
 
-  executeCommand(commandId: string) {
+  /**
+   * Run a command-palette command by exact ID (ADR-204).
+   *
+   * Gate 3 of 3: the allowlist. Independent of the enumeration gate
+   * (tool visibility) and the runtime permission gate (EXECUTE_COMMAND in
+   * SecureObsidianAPI). Fail-closed — an empty or absent allowlist blocks every
+   * command, and a command ID that is not on the list is refused WITHOUT being
+   * executed. The list is read live from plugin settings, so changes take effect
+   * without reconstructing the API.
+   */
+  async executeCommand(commandId: string): Promise<CommandExecutionResult> {
+    await Promise.resolve(); // async to match the SecureObsidianAPI override's permission gate
+    const allowlist = this.plugin?.settings?.commandExecutionAllowlist ?? [];
+    if (!allowlist.includes(commandId)) {
+      Debug.log(`🚫 Command '${commandId}' blocked — not in execution allowlist`);
+      return {
+        success: false,
+        commandId,
+        error: {
+          code: 'COMMAND_NOT_ALLOWED',
+          message: `Command '${commandId}' is not in the execution allowlist. Add it under Command execution in the plugin settings to permit it.`
+        }
+      };
+    }
+
     const appInternal = this.app as unknown as AppInternal;
     const success = appInternal.commands?.executeCommandById?.(commandId);
     return {

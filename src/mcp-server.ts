@@ -144,7 +144,12 @@ export class MCPHttpServer {
           delete: true,
           move: true,
           rename: true,
-          execute: true
+          execute: true,
+          // ADR-204: capability permitted in permissive mode; the enumeration
+          // (tool visibility, default off) and the allowlist (default empty)
+          // are the real user-facing gates. Read-only mode uses the readOnly
+          // preset, which sets this false.
+          executeCommand: true
         },
         blockedPaths: [],  // .mcpignore will handle blocking
         logSecurityEvents: false

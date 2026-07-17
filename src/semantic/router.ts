@@ -324,6 +324,13 @@ export class SemanticRouter implements RouterContext {
         return this.api.getServerInfo();
       case 'commands':
         return this.api.getCommands();
+      case 'execute': {
+        // ADR-204: gated command-palette execution. The command ID is checked
+        // against the allowlist in ObsidianAPI.executeCommand, and the
+        // EXECUTE_COMMAND permission is enforced by SecureObsidianAPI first.
+        const commandId = requireParamStr(params, 'commandId', 'system.execute');
+        return this.api.executeCommand(commandId);
+      }
       case 'fetch_web': {
         // Import fetch tool dynamically
         const { fetchTool } = await import('../tools/fetch.js');

@@ -162,8 +162,27 @@ export class SecureObsidianAPI extends ObsidianAPI {
 			path: path,
 			context: { method: 'openFile' }
 		});
-		
+
 		return super.openFile(validated.path!);
+	}
+
+	// Command execution — EXECUTE_COMMAND (ADR-204)
+
+	/**
+	 * Runtime permission gate (gate 2 of 3) for command-palette execution.
+	 * Validates OperationType.EXECUTE_COMMAND — distinct from EXECUTE (openFile)
+	 * so presets can allow opening files without allowing arbitrary commands.
+	 * A disabled permission throws SecurityError (fail-closed). The command ID
+	 * carries no path, so no path validation applies here; the allowlist gate
+	 * (gate 3) lives in the base ObsidianAPI.executeCommand this delegates to.
+	 */
+	async executeCommand(commandId: string): ReturnType<ObsidianAPI['executeCommand']> {
+		await this.security.validateOperation({
+			type: OperationType.EXECUTE_COMMAND,
+			context: { method: 'executeCommand', commandId }
+		});
+
+		return super.executeCommand(commandId);
 	}
 
 	// Note: These methods don't exist in base ObsidianAPI:

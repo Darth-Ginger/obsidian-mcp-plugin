@@ -60,6 +60,32 @@ export interface SemanticTool {
 /** Tool visibility map — keys are "operation" or "operation.action", values are enabled/disabled */
 export type ToolVisibility = Record<string, boolean>;
 
+/**
+ * Actions that invert ADR-101's "missing key = enabled" default (ADR-204).
+ * These are opt-in: enumerated/callable ONLY when explicitly set to `true` in
+ * the visibility map — an absent or non-`true` value keeps them disabled.
+ *
+ * Single source of truth, consumed by both the enumeration gate here and the
+ * settings tree UI in main.ts so the two never disagree.
+ */
+export const OPT_IN_ACTIONS: ReadonlySet<string> = new Set<string>([
+  'system.execute'
+]);
+
+/**
+ * Whether an `operation.action` is enabled given a visibility map.
+ * Opt-in actions (OPT_IN_ACTIONS) require an explicit `true`; all others follow
+ * ADR-101's default-enabled rule (anything but an explicit `false` is enabled).
+ * With no visibility map, opt-in actions are disabled and everything else enabled.
+ */
+export function isActionVisible(operation: string, action: string, visibility?: ToolVisibility): boolean {
+  const key = `${operation}.${action}`;
+  if (OPT_IN_ACTIONS.has(key)) {
+    return visibility?.[key] === true;
+  }
+  return visibility?.[key] !== false;
+}
+
 /** Plugin interface for checking read-only mode */
 interface PluginWithSettings {
   settings?: {
@@ -91,12 +117,11 @@ const createSemanticTool = (operation: string, visibility?: ToolVisibility): Sem
   // Check operation-level toggle
   if (visibility && visibility[operation] === false) return null;
 
-  // Filter actions based on visibility
-  let actions = getActionsForOperation(operation);
-  if (visibility) {
-    actions = actions.filter(action => visibility[`${operation}.${action}`] !== false);
-    if (actions.length === 0) return null;
-  }
+  // Filter actions based on visibility. Opt-in actions (ADR-204) are excluded
+  // unless explicitly enabled — so they never enumerate on the visibility-less
+  // (`semanticTools`) path either.
+  const actions = getActionsForOperation(operation).filter(action => isActionVisible(operation, action, visibility));
+  if (actions.length === 0) return null;
 
   return {
   name: operation,
@@ -122,8 +147,10 @@ const createSemanticTool = (operation: string, visibility?: ToolVisibility): Sem
     const args = (rawArgs ?? {}) as ToolArgs;
     const app = api.getApp();
 
-    // Defense in depth: block actions disabled by visibility even if tool is enumerated
-    if (visibility && visibility[`${operation}.${args.action}`] === false) {
+    // Defense in depth: block actions disabled by visibility even if tool is enumerated.
+    // Uses isActionVisible so opt-in actions (ADR-204) are blocked unless explicitly enabled,
+    // including on the visibility-less path.
+    if (!isActionVisible(operation, args.action, visibility)) {
       return {
         content: [{
           type: 'text' as const,
@@ -364,7 +391,7 @@ export function getOperationDescription(operation: string): string {
     edit: '✏️ Edit files - window: find/replace with fuzzy matching, append: add to end, patch: modify headings/blocks/frontmatter, at_line: insert at line number, from_buffer: reuse previous window content',
     view: '👁️ View content - file: entire document, window: ~20 lines around point, active: current editor file, open_in_obsidian: launch in app',
     workflow: '💡 Get contextual suggestions for next actions based on current state',
-    system: 'ℹ️ System operations - info: server details, commands: available actions, fetch_web: retrieve and process web content',
+    system: 'ℹ️ System operations - info: server details, commands: list available command IDs, fetch_web: retrieve and process web content, execute: run a command-palette command by exact ID (opt-in and allowlisted — disabled by default; see ADR-204)',
     graph: '🕸️ Graph navigation — follow the vault\'s own links. Use this to EXPAND from a note you already found rather than running another search: search ranks by term frequency, so it cannot reach a note that covers the topic in different words, but a link to it usually exists. BLIND SPOT (the mirror of search\'s): traversal only reaches what someone actually linked. A note can be genuinely relevant and simply unlinked — no amount of traversal will find it. So the two are complements, not substitutes: scan broadly with `vault.search` to catch the unlinked, then follow links from the hits to catch the differently-worded. Trust neither alone. Actions — neighbors: immediate links of a note (start here); traverse: multi-hop exploration; search-traverse: scan-and-follow in one call, but it returns SNIPPETS per node and prunes on scoreThreshold, so use it to discover WHICH notes matter, then read them — do not treat its snippets as the whole argument; path: how two notes connect; backlinks/forwardlinks: directional links (backlinks are how you find what depends on a note — its own text does not know); statistics: link counts (call with no sourcePath for vault-wide density); tag-analysis/shared-tags: tag structure.',
     dataview: '📊 Dataview operations - query: execute DQL queries (LIST FROM "folder", TABLE field FROM #tag WHERE condition), list: get pages with metadata and frontmatter, metadata: extract complete page metadata, validate: check DQL syntax, status: plugin availability. Supports LIST, TABLE, TASK, CALENDAR queries with WHERE filters, sorting, grouping.',
     bases: '🗃️ Bases operations - list: show all .base files, read: get YAML config, create: new base with views/filters/formulas, query: execute filters on vault notes, view: get table/card view data, evaluate: test formulas, export: CSV/JSON/Markdown. Bases use YAML format with expression-based filters like status == "active" and file.hasTag("project")'
@@ -378,7 +405,7 @@ export function getActionsForOperation(operation: string): string[] {
     edit: ['window', 'append', 'patch', 'at_line', 'from_buffer'],
     view: ['file', 'window', 'active', 'open_in_obsidian'],
     workflow: ['suggest'],
-    system: ['info', 'commands', 'fetch_web'],
+    system: ['info', 'commands', 'fetch_web', 'execute'],
     graph: ['traverse', 'neighbors', 'path', 'statistics', 'backlinks', 'forwardlinks', 'search-traverse', 'advanced-traverse', 'tag-traverse', 'tag-analysis', 'shared-tags'],
     dataview: ['query', 'list', 'metadata', 'validate', 'status'],
     bases: ['list', 'read', 'create', 'query', 'view', 'export']
@@ -604,6 +631,10 @@ function getParametersForOperation(operation: string): Record<string, unknown> {
       url: {
         type: 'string',
         description: 'URL to fetch and convert to markdown'
+      },
+      commandId: {
+        type: 'string',
+        description: 'Exact command ID to run for the "execute" action (e.g. "app:open-vault"). Discover valid IDs with action "commands". Only IDs on the configured allowlist will run; anything else is refused.'
       }
     },
     graph: {

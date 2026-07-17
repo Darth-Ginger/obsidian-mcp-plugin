@@ -7,7 +7,7 @@ import { randomBytes } from 'crypto';
 import { PluginDetector } from './utils/plugin-detector';
 import { CertificateConfig } from './utils/certificate-manager';
 import { ValidationConfig } from './validation/input-validator';
-import { ALL_OPERATIONS, getActionsForOperation, getOperationDescription } from './tools/semantic-tools';
+import { ALL_OPERATIONS, getActionsForOperation, getOperationDescription, isActionVisible } from './tools/semantic-tools';
 import { BindMode, classifyFromSettings, normalizeBindInput } from './utils/network-classifier';
 
 interface MCPPluginSettings {
@@ -1366,9 +1366,10 @@ class MCPSettingTab extends PluginSettingTab {
 
 		const visibility = this.plugin.settings.toolVisibility;
 
+		// Honors OPT_IN_ACTIONS (ADR-204): opt-in actions like system.execute read
+		// as disabled unless explicitly enabled, matching the enumeration gate.
 		const isActionEnabled = (op: string, action: string): boolean => {
-			const key = `${op}.${action}`;
-			return visibility[key] !== false;
+			return isActionVisible(op, action, visibility);
 		};
 
 		const isOperationFullyEnabled = (op: string): boolean => {
@@ -1529,7 +1530,7 @@ class MCPSettingTab extends PluginSettingTab {
 		for (const entry of toolEntries) {
 			if (!entry.available) continue;
 			const actions = getActionsForOperation(entry.name);
-			const enabledActions = actions.filter(a => visibility[`${entry.name}.${a}`] !== false);
+			const enabledActions = actions.filter(a => isActionVisible(entry.name, a, visibility));
 			const isDisabled = visibility[entry.name] === false || enabledActions.length === 0;
 
 			const li = toolsListEl.createEl('li', {
