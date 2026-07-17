@@ -5,7 +5,8 @@ import { App } from 'obsidian';
 
 // Mock Obsidian (mirrors read-only-mode.test.ts)
 jest.mock('obsidian', () => ({
-  normalizePath: jest.fn((p: string) => p.replace(/\\/g, '/'))
+  normalizePath: jest.fn((p: string) => p.replace(/\\/g, '/')),
+  Notice: class { constructor(_message?: string) { /* no-op notice stub */ } }
 }));
 
 /**
@@ -185,6 +186,62 @@ describe('Gated command execution (ADR-204)', () => {
       expect(result.success).toBe(false);
       expect(result.error?.code).toBe('COMMAND_NOT_ALLOWED');
       expect(executed).toEqual([]);
+    });
+  });
+
+  // --- Interaction detection (ADR-204 fire-and-forget mitigation) ---
+
+  describe('interaction detection', () => {
+    // Simulate the Obsidian DOM: querySelectorAll('.modal-container, .prompt')
+    // returns a growing count as a command opens a dialog.
+    const withDocument = (getCount: () => number) => {
+      (global as unknown as { activeDocument?: unknown }).activeDocument = {
+        querySelectorAll: () => ({ length: getCount() })
+      };
+    };
+    const clearDocument = () => {
+      delete (global as unknown as { activeDocument?: unknown }).activeDocument;
+    };
+
+    afterEach(clearDocument);
+
+    test('flags awaitingUserInteraction when a command opens a dialog', async () => {
+      let dialogs = 0;
+      withDocument(() => dialogs);
+      // The command opens a modal synchronously on dispatch.
+      (mockApp as unknown as { commands: { executeCommandById: (id: string) => boolean } })
+        .commands.executeCommandById = (id: string) => {
+          executed.push(id);
+          dialogs = 1;
+          return true;
+        };
+
+      const api = new ObsidianAPI(mockApp, undefined, pluginWith(['app:open-settings']));
+      const result = await api.executeCommand('app:open-settings');
+
+      expect(result.success).toBe(true);
+      expect(result.awaitingUserInteraction).toBe(true);
+      expect(result.warning).toMatch(/dialog/i);
+    });
+
+    test('does not flag interaction when no dialog opens', async () => {
+      withDocument(() => 0);
+
+      const api = new ObsidianAPI(mockApp, undefined, pluginWith(['app:open-settings']));
+      const result = await api.executeCommand('app:open-settings');
+
+      expect(result.success).toBe(true);
+      expect(result.awaitingUserInteraction).toBeUndefined();
+      expect(result.warning).toBeUndefined();
+    });
+
+    test('detection is inert outside a DOM environment', async () => {
+      // No global.document (afterEach cleared it) — detection must no-op, not throw.
+      const api = new ObsidianAPI(mockApp, undefined, pluginWith(['app:open-settings']));
+      const result = await api.executeCommand('app:open-settings');
+
+      expect(result.success).toBe(true);
+      expect(result.awaitingUserInteraction).toBeUndefined();
     });
   });
 

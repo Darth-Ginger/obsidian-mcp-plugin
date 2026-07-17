@@ -47,6 +47,7 @@ interface MCPPluginRef {
     validation?: Partial<import('./validation/input-validator').ValidationConfig>;
     // ADR-204: exact command IDs permitted for system.execute (allowlist gate)
     commandExecutionAllowlist?: string[];
+    notifyOnCommandExecution?: boolean;
   };
   manifest: { dir?: string };
   // From ObsidianAPIPluginRef

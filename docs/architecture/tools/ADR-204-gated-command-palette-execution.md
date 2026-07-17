@@ -202,6 +202,39 @@ existing tool-visibility tree automatically, rendered from `getActionsForOperati
   plugin. Per-connection/per-session scoping is left for a future ADR if demand
   appears.
 
+## Known limitations
+
+### Execution is fire-and-forget; `success` means *dispatched*, not *finished*
+
+`app.commands.executeCommandById(id)` returns as soon as the command's callback is
+invoked. It reports whether the command *ran*, not whether it *completed*, and
+Obsidian exposes no "command finished" signal. So a command that opens a modal
+(e.g. QuickAdd's suggester) returns `success: true` while a dialog now sits in
+Obsidian waiting on a human — one the agent can neither see nor drive. Left
+unaddressed, the agent believes it succeeded and marches on while the vault is
+parked mid-interaction. This is a genuine point in favour of ADR-200's "admin ops
+don't belong in an agent MCP"; we mitigate rather than fully solve it.
+
+**Mitigations (do not eliminate the limitation):**
+
+1. **Interaction detection.** `executeCommand` snapshots the count of open dialogs
+   (`.modal-container`, `.prompt`) before dispatch and re-checks after a short
+   settle. If one opened, the result carries `awaitingUserInteraction: true` and a
+   `warning`. This is a **best-effort DOM heuristic** — it catches modals and
+   suggesters, not every possible async UI, and it is inert outside a DOM runtime
+   (tests). It converts a *silent* trap into a *reported* state; the agent still
+   cannot complete the dialog.
+2. **In-app Notice.** When an agent runs a command, an Obsidian `Notice` surfaces
+   it in real time (setting `notifyOnCommandExecution`, default on), so the human
+   is aware a dialog they see was agent-triggered.
+3. **Honest contract.** The tool description and `CommandExecutionResult` state
+   plainly that `success` is dispatch, not completion.
+
+**Explicitly rejected:** auto-dismissing or auto-confirming the detected dialog.
+An agent silently pressing "OK" on a modal it cannot read could confirm a
+destructive action or discard user intent — strictly worse than leaving it for a
+human. We detect and report; we never drive.
+
 ## Alternatives Considered
 
 - **Do nothing (status quo).** Leave `executeCommand()` unwired, as ADR-200

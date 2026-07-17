@@ -34,6 +34,8 @@ interface MCPPluginSettings {
 	// Empty = block everything (fail-closed). Populated from live getCommands()
 	// in the settings UI, never freeform.
 	commandExecutionAllowlist: string[];
+	// ADR-204: show an in-app Notice when an agent runs a command (awareness cue).
+	notifyOnCommandExecution: boolean;
 }
 
 interface MCPServerInfo {
@@ -91,7 +93,8 @@ const DEFAULT_SETTINGS: MCPPluginSettings = {
 		strictMode: false
 	},
 	toolVisibility: {}, // Empty = all tools enabled (missing keys default to true)
-	commandExecutionAllowlist: [] // ADR-204: empty = no command may run (fail-closed)
+	commandExecutionAllowlist: [], // ADR-204: empty = no command may run (fail-closed)
+	notifyOnCommandExecution: true // ADR-204: notify in-app when an agent runs a command
 };
 
 export default class ObsidianMCPPlugin extends Plugin {
@@ -1529,6 +1532,19 @@ class MCPSettingTab extends PluginSettingTab {
 				cls: 'setting-item-description mcp-warning-box'
 			});
 		}
+
+		// Awareness cue: notify in-app when an agent runs a command. Some commands
+		// open a dialog that waits on a person; the result flags this, and this
+		// Notice makes it visible in real time.
+		new Setting(containerEl)
+			.setName('Notify when a command runs')
+			.setDesc('Show a brief in-app notice whenever an agent executes a command. Helps you notice commands that open a dialog needing your input.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.notifyOnCommandExecution)
+				.onChange(async (value) => {
+					this.plugin.settings.notifyOnCommandExecution = value;
+					await this.plugin.saveSettings();
+				}));
 
 		const available = this.getAvailableCommands();
 		const nameById = new Map(available.map(c => [c.id, c.name]));

@@ -19,6 +19,7 @@ interface SecurePluginRef {
 		httpPort?: number;
 		// ADR-204: read by the base ObsidianAPI.executeCommand allowlist gate.
 		commandExecutionAllowlist?: string[];
+		notifyOnCommandExecution?: boolean;
 	};
 	ignoreManager?: MCPIgnoreManager;
 	mcpServer?: { isServerRunning(): boolean; getConnectionCount(): number };
