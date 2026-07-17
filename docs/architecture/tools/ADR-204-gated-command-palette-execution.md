@@ -235,6 +235,18 @@ An agent silently pressing "OK" on a modal it cannot read could confirm a
 destructive action or discard user intent — strictly worse than leaving it for a
 human. We detect and report; we never drive.
 
+### Future direction (not yet decided — out of scope for this ADR)
+
+The fire-and-forget limitation is inherent to running commands *as commands*. A
+cleaner resolution for the interactive class is to bypass the command/modal path
+entirely and call the target plugin's own documented API with typed arguments
+(e.g. QuickAdd's `executeChoice(name, variables)`), so the agent supplies inputs
+as tool parameters and the call resolves synchronously on completion. That would
+be a **registration/adapter** layer on top of this ADR — Tier 0 (plain dispatch,
+this ADR) unchanged, with a new typed tier for adapter-backed actions. It is
+being explored as a separate ADR and is **not** decided here; ADR-204 stands on
+its own as the gated dispatch mechanism regardless of whether that layer lands.
+
 ## Alternatives Considered
 
 - **Do nothing (status quo).** Leave `executeCommand()` unwired, as ADR-200
