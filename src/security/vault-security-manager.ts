@@ -17,7 +17,8 @@ export enum OperationType {
 	MOVE = 'move',        // moveFile
 	RENAME = 'rename',    // renameFile
 	COPY = 'copy',        // copyFile
-	EXECUTE = 'execute'   // openFile (opens in Obsidian)
+	EXECUTE = 'execute',  // openFile (opens in Obsidian)
+	EXECUTE_COMMAND = 'execute_command' // executeCommand (runs a command-palette command by ID — ADR-204)
 }
 
 /**
@@ -38,6 +39,7 @@ export interface SecuritySettings {
 		move: boolean;      // Special operations
 		rename: boolean;
 		execute: boolean;   // Opening files in Obsidian
+		executeCommand: boolean; // Running command-palette commands by ID (ADR-204)
 	};
 	
 	// Advanced options
@@ -59,7 +61,8 @@ export const DEFAULT_SECURITY_SETTINGS: SecuritySettings = {
 		delete: true,
 		move: true,
 		rename: true,
-		execute: true
+		execute: true,
+		executeCommand: true
 	},
 	logSecurityEvents: true,
 	notifyOnBlocked: true
@@ -259,6 +262,8 @@ export class VaultSecurityManager {
 				return perms.create && perms.read; // Copy requires both
 			case OperationType.EXECUTE:
 				return perms.execute;
+			case OperationType.EXECUTE_COMMAND:
+				return perms.executeCommand;
 			default:
 				return false;
 		}
@@ -429,10 +434,11 @@ export class VaultSecurityManager {
 				delete: false,
 				move: false,
 				rename: false,
-				execute: false
+				execute: false,
+				executeCommand: false
 			}
 		}),
-		
+
 		safeMode: (): Partial<SecuritySettings> => ({
 			permissions: {
 				read: true,
@@ -441,10 +447,13 @@ export class VaultSecurityManager {
 				delete: false,
 				move: true,
 				rename: true,
-				execute: true
+				execute: true,
+				// ADR-204: safeMode allows openFile (reversible, inert) but NOT
+				// arbitrary command execution, which is neither.
+				executeCommand: false
 			}
 		}),
-		
+
 		fullAccess: (): Partial<SecuritySettings> => ({
 			permissions: {
 				read: true,
@@ -453,7 +462,8 @@ export class VaultSecurityManager {
 				delete: true,
 				move: true,
 				rename: true,
-				execute: true
+				execute: true,
+				executeCommand: true
 			}
 		})
 	};

@@ -45,6 +45,8 @@ interface MCPPluginRef {
     security?: Partial<import('./security/vault-security-manager').SecuritySettings>;
     // From ObsidianAPIPluginRef (for ObsidianAPI)
     validation?: Partial<import('./validation/input-validator').ValidationConfig>;
+    // ADR-204: exact command IDs permitted for system.execute (allowlist gate)
+    commandExecutionAllowlist?: string[];
   };
   manifest: { dir?: string };
   // From ObsidianAPIPluginRef
@@ -144,7 +146,12 @@ export class MCPHttpServer {
           delete: true,
           move: true,
           rename: true,
-          execute: true
+          execute: true,
+          // ADR-204: capability permitted in permissive mode; the enumeration
+          // (tool visibility, default off) and the allowlist (default empty)
+          // are the real user-facing gates. Read-only mode uses the readOnly
+          // preset, which sets this false.
+          executeCommand: true
         },
         blockedPaths: [],  // .mcpignore will handle blocking
         logSecurityEvents: false

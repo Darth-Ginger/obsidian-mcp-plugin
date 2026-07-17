@@ -7,7 +7,7 @@ import { randomBytes } from 'crypto';
 import { PluginDetector } from './utils/plugin-detector';
 import { CertificateConfig } from './utils/certificate-manager';
 import { ValidationConfig } from './validation/input-validator';
-import { ALL_OPERATIONS, getActionsForOperation, getOperationDescription } from './tools/semantic-tools';
+import { ALL_OPERATIONS, getActionsForOperation, getOperationDescription, isActionVisible } from './tools/semantic-tools';
 import { BindMode, classifyFromSettings, normalizeBindInput } from './utils/network-classifier';
 
 interface MCPPluginSettings {
@@ -30,6 +30,10 @@ interface MCPPluginSettings {
 	enableIgnoreContextMenu: boolean;
 	validation?: Partial<ValidationConfig>;
 	toolVisibility: Record<string, boolean>;
+	// ADR-204: exact command IDs the agent may run via system.execute.
+	// Empty = block everything (fail-closed). Populated from live getCommands()
+	// in the settings UI, never freeform.
+	commandExecutionAllowlist: string[];
 }
 
 interface MCPServerInfo {
@@ -86,7 +90,8 @@ const DEFAULT_SETTINGS: MCPPluginSettings = {
 		maxRegexComplexity: 100,
 		strictMode: false
 	},
-	toolVisibility: {} // Empty = all tools enabled (missing keys default to true)
+	toolVisibility: {}, // Empty = all tools enabled (missing keys default to true)
+	commandExecutionAllowlist: [] // ADR-204: empty = no command may run (fail-closed)
 };
 
 export default class ObsidianMCPPlugin extends Plugin {
@@ -622,6 +627,9 @@ class MCPSettingTab extends PluginSettingTab {
 
 		// Tool Visibility Section
 		this.createToolVisibilitySection(containerEl);
+
+		// Command Execution Allowlist Section (ADR-204)
+		this.createCommandExecutionSection(containerEl);
 
 		// UI Options Section
 		this.createUIOptionsSection(containerEl);
@@ -1366,9 +1374,10 @@ class MCPSettingTab extends PluginSettingTab {
 
 		const visibility = this.plugin.settings.toolVisibility;
 
+		// Honors OPT_IN_ACTIONS (ADR-204): opt-in actions like system.execute read
+		// as disabled unless explicitly enabled, matching the enumeration gate.
 		const isActionEnabled = (op: string, action: string): boolean => {
-			const key = `${op}.${action}`;
-			return visibility[key] !== false;
+			return isActionVisible(op, action, visibility);
 		};
 
 		const isOperationFullyEnabled = (op: string): boolean => {
@@ -1468,6 +1477,126 @@ class MCPSettingTab extends PluginSettingTab {
 		}
 	}
 
+	/**
+	 * Reads the live command-palette command list (id + friendly name) from the
+	 * running Obsidian app. Mirrors ObsidianAPI.getCommands() but is read here
+	 * directly so the settings tab does not need a constructed API instance.
+	 */
+	private getAvailableCommands(): { id: string; name: string }[] {
+		const appInternal = this.app as unknown as {
+			commands?: { commands?: Record<string, { id: string; name: string }> };
+		};
+		const commands = appInternal.commands?.commands;
+		if (!commands) return [];
+		return Object.values(commands)
+			.map(cmd => ({ id: cmd.id, name: cmd.name }))
+			.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	/**
+	 * ADR-204: allowlist management for gated command-palette execution.
+	 * Populated from live getAvailableCommands() via a dropdown (never freeform),
+	 * so every entry is a real, current command ID and a typo cannot silently
+	 * create a dead entry. Also surfaces the system.execute visibility opt-in so
+	 * both required gates are configurable in one place.
+	 */
+	private createCommandExecutionSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName("Command execution").setHeading();
+
+		containerEl.createEl('p', {
+			text: 'Let agents run command-palette commands via system.execute. Disabled by default. Two independent gates must both be opted into: the system.execute tool must be made visible, and a command must be added to the allowlist below. An empty allowlist blocks every command.',
+			cls: 'setting-item-description mcp-security-note'
+		});
+
+		const allowlist = this.plugin.settings.commandExecutionAllowlist;
+		const visibilityEnabled = isActionVisible('system', 'execute', this.plugin.settings.toolVisibility);
+
+		// Gate 1: system.execute visibility opt-in (mirrors the tree toggle).
+		new Setting(containerEl)
+			.setName('Enable system.execute tool')
+			.setDesc('Make the command-execution action visible and callable to connecting agents. Off by default; must be explicitly opted in. Also toggleable in the tool visibility section.')
+			.addToggle(toggle => toggle
+				.setValue(visibilityEnabled)
+				.onChange(async (value) => {
+					this.plugin.settings.toolVisibility['system.execute'] = value;
+					await this.plugin.saveSettings();
+					this.render();
+				}));
+
+		if (visibilityEnabled && allowlist.length === 0) {
+			containerEl.createEl('p', {
+				text: '⚠️ system.execute is visible but the allowlist is empty — no command will run until you add one below.',
+				cls: 'setting-item-description mcp-warning-box'
+			});
+		}
+
+		const available = this.getAvailableCommands();
+		const nameById = new Map(available.map(c => [c.id, c.name]));
+
+		// Gate 2: current allowlist entries, each removable.
+		new Setting(containerEl).setName(`Allowed commands (${allowlist.length})`).setHeading();
+
+		if (allowlist.length === 0) {
+			containerEl.createEl('p', {
+				text: 'No commands allowed yet. Add one from the dropdown below.',
+				cls: 'setting-item-description mcp-security-note'
+			});
+		} else {
+			for (const id of allowlist) {
+				const friendly = nameById.get(id);
+				const setting = new Setting(containerEl)
+					.setName(friendly ?? id)
+					.setDesc(friendly ? id : 'Command ID not found in the current command list (plugin disabled or ID changed) — it will never match until it exists again.')
+					.addExtraButton(btn => btn
+						.setIcon('trash')
+						.setTooltip('Remove from allowlist')
+						.onClick(async () => {
+							this.plugin.settings.commandExecutionAllowlist =
+								this.plugin.settings.commandExecutionAllowlist.filter(x => x !== id);
+							await this.plugin.saveSettings();
+							this.render();
+						}));
+				if (!friendly) setting.setClass('mcp-tool-disabled');
+			}
+		}
+
+		// Add control: dropdown of commands not already allowed, plus an Add button.
+		const addable = available.filter(c => !allowlist.includes(c.id));
+		if (available.length === 0) {
+			containerEl.createEl('p', {
+				text: 'No commands are available to list from Obsidian right now.',
+				cls: 'setting-item-description mcp-security-note'
+			});
+		} else if (addable.length === 0) {
+			containerEl.createEl('p', {
+				text: 'All available commands are already on the allowlist.',
+				cls: 'setting-item-description mcp-security-note'
+			});
+		} else {
+			let selectedId = addable[0].id;
+			new Setting(containerEl)
+				.setName('Add a command')
+				.setDesc('Pick an exact command by name — the allowlist stores its ID.')
+				.addDropdown(dropdown => {
+					for (const c of addable) {
+						dropdown.addOption(c.id, `${c.name}  (${c.id})`);
+					}
+					dropdown.setValue(selectedId);
+					dropdown.onChange(value => { selectedId = value; });
+				})
+				.addButton(btn => btn
+					.setButtonText('Add')
+					.setCta()
+					.onClick(async () => {
+						if (!selectedId || this.plugin.settings.commandExecutionAllowlist.includes(selectedId)) return;
+						this.plugin.settings.commandExecutionAllowlist.push(selectedId);
+						await this.plugin.saveSettings();
+						new Notice(`Added "${nameById.get(selectedId) ?? selectedId}" to the command allowlist`);
+						this.render();
+					}));
+		}
+	}
+
 	private createUIOptionsSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName("Interface").setHeading();
 
@@ -1529,7 +1658,7 @@ class MCPSettingTab extends PluginSettingTab {
 		for (const entry of toolEntries) {
 			if (!entry.available) continue;
 			const actions = getActionsForOperation(entry.name);
-			const enabledActions = actions.filter(a => visibility[`${entry.name}.${a}`] !== false);
+			const enabledActions = actions.filter(a => isActionVisible(entry.name, a, visibility));
 			const isDisabled = visibility[entry.name] === false || enabledActions.length === 0;
 
 			const li = toolsListEl.createEl('li', {
